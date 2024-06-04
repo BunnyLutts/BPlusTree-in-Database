@@ -70,16 +70,19 @@ namespace bustub {
         page_id_t x = guard.template As<BPlusTreeHeaderPage>()->root_page_id_;
         guard = bpm_->FetchPageRead(x);
         auto x_page = guard.template As<BPlusTreePage>();
+        InternalPage *internal_page;
+        LeafPage *leaf_page;
         while (!x->IsLeafPage()) {
-            x_page = guard.template As<BPlusTreeInternalPage>();
-            x = x_page->ValueAt(BinaryFind(x_page, key));
+            internal_page = guard.template As<InternalPage>();
+            x = internal_page->ValueAt(BinaryFind(internal_page, key));
             guard = bpm_->FetchPageRead(x);
             x_page = guard.template As<BPlusTreePage>();
         }
 
-        int pos = BinaryFind(x_page, key);
+        leaf_page = guard.template As<LeafPage>();
+        int pos = BinaryFind(leaf_page, key);
         if (pos<0) return false;
-        result->push_back(x_page->GetValue(pos));
+        result->push_back(leaf_page->GetValue(pos));
         return true;
     }
 
@@ -97,7 +100,63 @@ namespace bustub {
     INDEX_TEMPLATE_ARGUMENTS
     auto BPLUSTREE_TYPE::Insert(const KeyType& key, const ValueType& value,
                                 Transaction* txn) -> bool {
-        page_id_t x = FindLeafPage(key, txn);
+
+        Context context;
+        context.header_page_ = bpm_->FetchPageWrite(header_page_id_);
+        auto header_page = context.header_page_.template AsMut<BPlusTreeHeaderPage>();
+        if (contex->root_page_id_ == INVALID_PAGE_ID) {
+            auto root_page_guard = bpm_->NewPageGuarded(&context.root_page_id_).UpgradeWrite();
+            header_page->root_page_id_ = context.root_page_id_;
+            auto root_page = root_page_guard.template AsMut<InternalPage>();
+            root_page->setSize(1);
+            page_id_t leaf_page_id;
+            auto leaf_page_guard = bpm_->NewPageGuarded(&leaf_page_id).UpgradeWrite();
+            leaf_page_guard.template AsMut<BPlusTreeLeafPage>()->Insert(key, value);
+            root_page->setValueAt(leaf_page_id);
+            return true;
+        }
+        context.header_page_.value().Drop();
+        context.header_page_ = std::nullopt;
+
+        InternalPage *internal_page;
+        LeafPage *leaf_page;
+        page_id_t x = context.root_page_id_;
+        context.write_set_.emplace_back(bpm_->FetchPageWrite(x));
+        auto x_page = context.write_set_.back().template As<BPlusTreePage>();
+        while (!x_page->IsLeafPage()) {
+            if (x_page->GetSize() < x_page->GetMaxSize()) { // Crame it
+                for (; context.write_set_.size() > 1; context.write_set_.pop_front());
+            }
+            internal_page = context.write_set_.back().template As<InternalPage>();
+            int pos = BinaryFind(internal_page, key);
+            x = internal_page->ValueAt(pos);
+            context.write_set_.emplace_back(bpm_->FetchPageWrite(x));
+            x_page = context.write_set_.back().template As<BPlusTreePage>();
+        }
+
+        if (x_page->GetSize() < x_page->GetMaxSize()) { // Crame it
+            for (; context.write_set_.size() > 1; context.write_set_.pop_front());
+        }
+
+        // Split the page
+        for (; context.write_set_.size()>1; context.write_set_.pop_front()) {
+            internal_page = context.write_set_.front().template As<InternalPage>();
+            if (!context.write_set_[1].template As<BPlusTree>()->IsLeafPage()) {
+                auto page = context.write_set_[1].template As<InternalPage>();
+                page_id_t new_page_id;
+                SplitPage(page, new_page_id);
+                InsertAt(internal_page, bpm_->FetchPageRead(new_page_id).template As<InternalPage>()->ValueAt(0), new_page_id);
+            } else {
+                auto page = context.write_set_[1].template As<LeafPage>();
+                page_id_t new_page_id;
+                SplitPage(page, new_page_id);
+                InsertAt(internal_page, bpm_->FetchPageRead(new_page_id).template As<LeafPage>()->ValueAt(0), new_page_id);
+            }
+        }
+
+        leaf_page = context.write_set_.back().template As<LeafPage>();
+        InsertAt(leaf_page, key, value);
+
         return true;
     }
 
@@ -116,6 +175,89 @@ namespace bustub {
     void BPLUSTREE_TYPE::Remove(const KeyType& key, Transaction* txn) {
         // Your code here
     }
+
+    /*****************************************************************************
+     * Helper functions
+    ******************************************************************************/
+
+    /*
+    * Move from pos to the right by one node
+    */
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::MoveRight(InternalPage* page, int pos) {
+        page->IncreaseSize(1);
+        for (int i = page->GetSize() - 1; i > pos; i--) {
+            page->SetKeyAt(i, page->KeyAt(i - 1));
+            page->SetValueAt(i, page->ValueAt(i - 1));
+        }
+    }
+
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::MoveRight(LeafPage* page, int pos) {
+        page->IncreaseSize(1);
+        for (int i = page->GetSize() - 1; i > pos; i--) {
+            page->SetKeyAt(i, page->KeyAt(i - 1));
+            page->SetValueAt(i, page->ValueAt(i - 1));
+        }
+    }
+
+    /*
+    * Split a page
+    */
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::SplitPage(InternalPage* lpage, page_id_t& new_page_id) {
+        WritePageGuard new_page_guard = bpm_->NewPageGuarded(&new_page_id).UpgradeWrite();
+        InternalPage* rpage = new_page_guard.template AsMut<InternalPage>();
+        int lsize = lpage->GetSize()/2, rsize = lpage->GetSize() - lsize;
+        rpage->SetSize(rsize);
+        for (int i = lsize; i<lpage->GetSize(); i++) {
+            rsize.SetKeyAt(i - lsize, lpage->KeyAt(i));
+            rsize.SetValueAt(i - lsize, lpage->ValueAt(i));
+        }
+        lpage->SetSize(lsize);
+    }
+
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::SplitPage(LeafPage* lpage, page_id_t& new_page_id) {
+        WritePageGuard new_page_guard = bpm_->NewPageGuarded(&new_page_id).UpgradeWrite();
+        LeafPage* rpage = new_page_guard.template AsMut<LeafPage>();
+        int lsize = lpage->GetSize()/2, rsize = lpage->GetSize() - lsize;
+        rpage->SetSize(rsize);
+        for (int i = lsize; i<lpage->GetSize(); i++) {
+            rsize.SetKeyAt(i - lsize, lpage->KeyAt(i));
+            rsize.SetValueAt(i - lsize, lpage->ValueAt(i));
+        }
+        lpage->SetSize(lsize);
+    }
+
+    /*
+    * Merge two pages
+    */
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::MergePage(InternalPage* lpage, InternalPage* rpage) {}
+
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::MergePage(LeafPage* lpage, LeafPage* rpage) {}
+
+    /*
+    * Insert key & value pair into a page
+    */
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::InsertAt(InternalPage* page, const KeyType& key, page_id_t value) {
+        int pos = BinaryFind(page, key);
+        MoveRight(page, pos+1);
+        page->SetKeyAt(pos+1, key);
+        page->SetValueAt(pos+1, value);
+    }
+
+    INDEX_TEMPLATE_ARGUMENTS
+    void BPLUSTREE_TYPE::InsertAt(LeafPage* page, const KeyType &key, const ValueType &value) {
+        int pos = BinaryFind(page, key);
+        MoveRight(page, pos+1);
+        page->SetKeyAt(pos+1, key);
+        page->SetValueAt(pos+1, value);
+    }
+
 
     /*****************************************************************************
      * INDEX ITERATOR

@@ -132,6 +132,29 @@ namespace bustub {
         void BatchOpsFromFile(const std::string &file_name, Transaction *txn = nullptr);
 
     private:
+        /*
+        * Move the array from pos for one node to the right.
+        */
+        void MoveRight(InternalPage *page, int pos);
+        void MoveRight(LeafPage *page, int pos);
+
+        /*
+        * Split a page
+        */
+        void SplitPage(InternalPage *page, page_id_t &new_page_id);
+        void SplitPage(LeafPage *page, page_id_t &new_page_id);
+
+        /*
+        * Merge a page
+        */
+        void MergePage(InternalPage *lpage, InternalPage *rpage);
+        void MergePage(LeafPage *lpage, LeafPage *rpage);
+
+        /*
+        * Insert a key-value pair
+        */
+        void InsertAt(InternalPage *page, const KeyType &key, page_id_t child_page_id);
+        void InsertAt(LeafPage *page, const KeyType &key, const ValueType &value);
 
         /* Debug Routines for FREE!! */
         void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);
