@@ -139,10 +139,17 @@ namespace bustub {
         void MoveRight(LeafPage *page, int pos);
 
         /*
-        * Split a page
+        * Move the array from pos for one node to the left.
         */
-        void SplitPage(InternalPage *page, page_id_t &new_page_id);
-        void SplitPage(LeafPage *page, page_id_t &new_page_id);
+        void MoveLeft(InternalPage *page, int pos);
+        void MoveLeft(LeafPage *page, int pos);
+
+        /*
+        * Split a page
+        * returns the key in the middle
+        */
+        KeyType SplitPage(InternalPage *page, page_id_t &new_page_id);
+        KeyType SplitPage(LeafPage *page, page_id_t &new_page_id);
 
         /*
         * Merge a page
@@ -154,7 +161,7 @@ namespace bustub {
         * Insert a key-value pair
         */
         void InsertAt(InternalPage *page, const KeyType &key, page_id_t child_page_id);
-        void InsertAt(LeafPage *page, const KeyType &key, const ValueType &value);
+        bool InsertAt(LeafPage *page, const KeyType &key, const ValueType &value);
 
         /* Debug Routines for FREE!! */
         void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);
